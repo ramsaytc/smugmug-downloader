@@ -2,7 +2,9 @@ import crypto from "node:crypto";
 import OAuth from "oauth-1.0a";
 import type { Credentials } from "./config.js";
 
-const API_ROOT = "https://api.smugmug.com";
+// Override hook for integration tests only (point the real client at a local
+// stub server); never set in normal use.
+const API_ROOT = process.env.SMUGMUG_API_ROOT_OVERRIDE || "https://api.smugmug.com";
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));

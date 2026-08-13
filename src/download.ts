@@ -28,7 +28,14 @@ interface DownloadOutcome {
 }
 
 function sanitize(name: string): string {
-  return name.replace(/[\\/:*?"<>|]/g, "_").trim() || "untitled";
+  const cleaned = name.replace(/[\\/:*?"<>|]/g, "_").trim();
+  if (!cleaned) return "untitled";
+  // "." and ".." are the only segments path.join() treats as navigation
+  // rather than a literal name — neutralize them so a SmugMug folder,
+  // gallery, or filename that happens to be exactly ".." can't walk the
+  // output path outside the intended directory.
+  if (cleaned === "." || cleaned === "..") return `_${cleaned}`;
+  return cleaned;
 }
 
 /** Lowercases and collapses " / " (as `list` used to render it) down to "/" so copy-pasted queries still match. */
