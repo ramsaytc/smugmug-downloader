@@ -74,6 +74,40 @@ async function downloadImage(
   return { status: "failed", filename: image.filename, gallery, error: "unreachable" };
 }
 
+function albumKeyOf(gallery: GalleryNode): string {
+  return gallery.albumUri.split("/").filter(Boolean).pop() ?? "";
+}
+
+/**
+ * SmugMug allows two galleries to share the same folder + name (we've seen
+ * this in practice — e.g. one populated gallery and one empty duplicate).
+ * Left alone, both would resolve to the same output directory and silently
+ * clobber each other's files and _metadata.json. Disambiguate by album key.
+ */
+function resolveDestDirs(galleries: GalleryNode[], outDir: string): Map<GalleryNode, string> {
+  const labelCounts = new Map<string, number>();
+  for (const g of galleries) {
+    const label = galleryLabel(g);
+    labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+  }
+
+  const warned = new Set<string>();
+  const dirs = new Map<GalleryNode, string>();
+  for (const g of galleries) {
+    const label = galleryLabel(g);
+    let nameSegment = sanitize(g.name);
+    if ((labelCounts.get(label) ?? 0) > 1) {
+      nameSegment = `${nameSegment} (${albumKeyOf(g) || "?"})`;
+      if (!warned.has(label)) {
+        warned.add(label);
+        console.warn(`warning: multiple galleries named "${label}" — writing each to its own suffixed folder.`);
+      }
+    }
+    dirs.set(g, join(outDir, ...g.path.map(sanitize), nameSegment));
+  }
+  return dirs;
+}
+
 async function resolveGalleries(client: SmugMugClient, opts: DownloadOptions): Promise<GalleryNode[]> {
   let galleries = await listGalleries(client);
 
@@ -91,12 +125,13 @@ async function resolveGalleries(client: SmugMugClient, opts: DownloadOptions): P
   return galleries;
 }
 
-async function runDryRun(client: SmugMugClient, galleries: GalleryNode[]): Promise<void> {
+async function runDryRun(client: SmugMugClient, galleries: GalleryNode[], outDir: string): Promise<void> {
+  const destDirs = resolveDestDirs(galleries, outDir);
   let totalImages = 0;
   for (const gallery of galleries) {
     const images = await listImages(client, gallery.albumUri);
     totalImages += images.length;
-    console.log(`\n[${galleryLabel(gallery)}] ${images.length} image(s)`);
+    console.log(`\n[${galleryLabel(gallery)}] -> ${destDirs.get(gallery)} (${images.length} image(s))`);
     for (const image of images) console.log(`  would download: ${image.filename}`);
   }
   console.log(`\nDry run: ${galleries.length} galleries, ${totalImages} images would be processed.`);
@@ -108,10 +143,11 @@ export async function runDownload(client: SmugMugClient, opts: DownloadOptions):
   console.log(`Found ${galleries.length} galleries.`);
 
   if (opts.dryRun) {
-    await runDryRun(client, galleries);
+    await runDryRun(client, galleries, opts.outDir);
     return;
   }
 
+  const destDirs = resolveDestDirs(galleries, opts.outDir);
   const imageLimit = pLimit(opts.concurrency);
   const albumLimit = pLimit(opts.albumConcurrency);
 
@@ -136,7 +172,7 @@ export async function runDownload(client: SmugMugClient, opts: DownloadOptions):
     galleries.map((gallery) =>
       albumLimit(async () => {
         const label = galleryLabel(gallery);
-        const destDir = join(opts.outDir, ...gallery.path.map(sanitize), sanitize(gallery.name));
+        const destDir = destDirs.get(gallery)!;
         await mkdir(destDir, { recursive: true });
 
         const images = await listImages(client, gallery.albumUri);

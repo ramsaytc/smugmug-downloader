@@ -70,6 +70,28 @@ export async function listGalleries(client: SmugMugClient): Promise<GalleryNode[
   return out;
 }
 
+/** First non-empty (after trimming) string, since SmugMug returns "" rather than omitting the field for some older/imported photos. */
+function firstNonBlank(...values: (string | undefined | null)[]): string | undefined {
+  for (const v of values) {
+    if (v && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
+/**
+ * Builds a filename for images with no usable FileName/Filename from
+ * SmugMug (seen on some older or migrated-in photos) so they never collide
+ * with each other under a generic name like "untitled.jpg".
+ */
+function fallbackFilename(img: any, details: any): string {
+  const ext = firstNonBlank(details?.Format, img.Format)?.toLowerCase() || "jpg";
+  const key =
+    firstNonBlank(img.ImageKey) ??
+    (typeof img.Uri === "string" ? img.Uri.split("/").filter(Boolean).pop() : undefined) ??
+    "image";
+  return `${key}.${ext}`;
+}
+
 /**
  * Fetches every image in an album along with its best available download
  * URL. Prefers the ImageSizeDetails sub-resource (Original if the account's
@@ -84,25 +106,24 @@ export async function listImages(client: SmugMugClient, albumUri: string): Promi
     let downloadUrl: string | undefined;
     let fileSize: number | undefined;
     let md5: string | undefined;
-    let filename: string = img.FileName;
+    let details: any;
 
     const sizeDetailsUri: string | undefined = img?.Uris?.ImageSizeDetails?.Uri;
     if (sizeDetailsUri) {
       try {
-        const details = await client.get<any>(sizeDetailsUri);
-        const d = details.Response.ImageSizeDetails;
+        const res = await client.get<any>(sizeDetailsUri);
+        details = res.Response.ImageSizeDetails;
         downloadUrl =
-          d.OriginalImageUrl ??
-          d.LargestImageUrl ??
-          d.X5LargeImageUrl ??
-          d.X4LargeImageUrl ??
-          d.X3LargeImageUrl ??
-          d.X2LargeImageUrl ??
-          d.LargeImageUrl ??
-          d.MediumImageUrl;
-        fileSize = d.OriginalSize;
-        md5 = d.MD5Sum;
-        filename = d.Filename ?? filename;
+          details.OriginalImageUrl ??
+          details.LargestImageUrl ??
+          details.X5LargeImageUrl ??
+          details.X4LargeImageUrl ??
+          details.X3LargeImageUrl ??
+          details.X2LargeImageUrl ??
+          details.LargeImageUrl ??
+          details.MediumImageUrl;
+        fileSize = details.OriginalSize;
+        md5 = details.MD5Sum;
       } catch {
         // fall through to ArchivedUri below
       }
@@ -113,6 +134,8 @@ export async function listImages(client: SmugMugClient, albumUri: string): Promi
       fileSize = img.ArchivedSize;
       md5 = img.ArchivedMD5;
     }
+
+    const filename = firstNonBlank(details?.Filename, img.FileName) ?? fallbackFilename(img, details);
 
     if (!downloadUrl) {
       console.warn(`  warning: no downloadable size found for "${filename}", skipping`);
@@ -130,5 +153,21 @@ export async function listImages(client: SmugMugClient, albumUri: string): Promi
     });
   }
 
+  dedupeFilenames(out);
   return out;
+}
+
+/** Guards against any remaining filename collisions within a gallery (e.g. two cameras both producing "IMG_0001.jpg"), regardless of cause. */
+function dedupeFilenames(images: ImageEntry[]): void {
+  const seen = new Map<string, number>();
+  for (const image of images) {
+    const count = (seen.get(image.filename) ?? 0) + 1;
+    seen.set(image.filename, count);
+    if (count > 1) {
+      const dot = image.filename.lastIndexOf(".");
+      const base = dot > 0 ? image.filename.slice(0, dot) : image.filename;
+      const ext = dot > 0 ? image.filename.slice(dot) : "";
+      image.filename = `${base} (${count})${ext}`;
+    }
+  }
 }
