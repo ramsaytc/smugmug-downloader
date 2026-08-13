@@ -48,6 +48,9 @@ headless box where you generated tokens elsewhere.
 ```bash
 smugmug-dl whoami                 # confirm you're logged in
 smugmug-dl list                   # print every gallery path
+smugmug-dl size                   # estimate total size of everything, no downloading
+smugmug-dl size --by-gallery      # ...with a per-gallery breakdown
+smugmug-dl size --gallery "Exuma" # scope the estimate the same way --gallery scopes a download
 smugmug-dl download                       # download everything into ./smugmug-download
 smugmug-dl download -o ~/Pictures/smugmug # choose an output directory
 smugmug-dl download --dry-run             # preview without writing files
@@ -73,6 +76,18 @@ downloads for that content, otherwise the largest rendered size SmugMug
 offers. There's no `--size` flag; this always gets you the best available
 without guessing which sizes are permitted per-gallery.
 
+### Size estimate
+
+`smugmug-dl size` sums the same "best available" file size `download` would
+actually fetch for every image (see above), without writing anything to
+disk. It still has to query every image individually — there's no cheaper
+aggregate SmugMug exposes — so a very large library can take a little while;
+a progress bar tracks galleries as they're sized. If any image reports no
+size at all, it's called out separately and excluded from the total (so the
+real number is a floor, not an overestimate). Accepts the same
+`--gallery`/`--include`/`--exclude` filters as `download`, so you can size
+a subset before committing to downloading it.
+
 ### Options
 
 | Flag | Default | Description |
@@ -86,6 +101,9 @@ without guessing which sizes are permitted per-gallery.
 | `--force` | off | Re-download even if a matching file exists |
 | `--dry-run` | off | List what would happen, write nothing |
 | `--no-metadata` | — | Skip writing `_metadata.json` per gallery |
+
+`size` additionally takes `--by-gallery` (off by default) to print a
+per-gallery breakdown alongside the total.
 
 ## Development
 

@@ -5,6 +5,7 @@ import { requireCredentials } from "./config.js";
 import { SmugMugClient } from "./smugmugApi.js";
 import { galleryLabel, listGalleries } from "./gallery.js";
 import { runDownload } from "./download.js";
+import { runSizeEstimate } from "./size.js";
 
 const program = new Command();
 
@@ -45,6 +46,23 @@ program
       for (const g of galleries) console.log(galleryLabel(g));
       console.log(`\n${galleries.length} galleries total.`);
     }
+  });
+
+program
+  .command("size")
+  .description("Estimate total size of all (or selected) galleries without downloading")
+  .option("--gallery <name...>", "only these galleries: bare name or full path from `list` (repeatable)")
+  .option("--include <pattern>", "only include galleries whose path matches this regex")
+  .option("--exclude <pattern>", "exclude galleries whose path matches this regex")
+  .option("--by-gallery", "show a per-gallery breakdown, not just the total", false)
+  .action(async (opts: { gallery?: string[]; include?: string; exclude?: string; byGallery: boolean }) => {
+    const client = new SmugMugClient(requireCredentials());
+    await runSizeEstimate(client, {
+      include: opts.include ? new RegExp(opts.include, "i") : undefined,
+      exclude: opts.exclude ? new RegExp(opts.exclude, "i") : undefined,
+      onlyGalleries: opts.gallery,
+      byGallery: opts.byGallery,
+    });
   });
 
 program

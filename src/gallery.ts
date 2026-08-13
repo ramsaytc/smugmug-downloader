@@ -70,6 +70,35 @@ export async function listGalleries(client: SmugMugClient): Promise<GalleryNode[
   return out;
 }
 
+export interface GalleryFilterOptions {
+  include?: RegExp;
+  exclude?: RegExp;
+  onlyGalleries?: string[];
+}
+
+/** Lowercases and collapses " / " (as `list` used to render it pre-1.0) down to "/" so copy-pasted queries still match. */
+function normalizeGalleryQuery(s: string): string {
+  return s.trim().toLowerCase().replace(/\s*\/\s*/g, "/");
+}
+
+/** Fetches every gallery, then applies --gallery/--include/--exclude filtering shared by `download` and `size`. */
+export async function resolveGalleries(client: SmugMugClient, opts: GalleryFilterOptions): Promise<GalleryNode[]> {
+  let galleries = await listGalleries(client);
+
+  if (opts.onlyGalleries?.length) {
+    // Matches either the bare gallery name ("Exuma") or its full path
+    // ("Picturelife Memories/Exuma") as shown by `smugmug-dl list`.
+    const wanted = new Set(opts.onlyGalleries.map(normalizeGalleryQuery));
+    galleries = galleries.filter(
+      (g) => wanted.has(normalizeGalleryQuery(g.name)) || wanted.has(normalizeGalleryQuery(galleryLabel(g)))
+    );
+  }
+  if (opts.include) galleries = galleries.filter((g) => opts.include!.test(galleryLabel(g)));
+  if (opts.exclude) galleries = galleries.filter((g) => !opts.exclude!.test(galleryLabel(g)));
+
+  return galleries;
+}
+
 /** First non-empty (after trimming) string, since SmugMug returns "" rather than omitting the field for some older/imported photos. */
 function firstNonBlank(...values: (string | undefined | null)[]): string | undefined {
   for (const v of values) {

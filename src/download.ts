@@ -6,18 +6,22 @@ import { join } from "node:path";
 import pLimit from "p-limit";
 import cliProgress from "cli-progress";
 import type { SmugMugClient } from "./smugmugApi.js";
-import { galleryLabel, listGalleries, listImages, type GalleryNode, type ImageEntry } from "./gallery.js";
+import {
+  galleryLabel,
+  listImages,
+  resolveGalleries,
+  type GalleryFilterOptions,
+  type GalleryNode,
+  type ImageEntry,
+} from "./gallery.js";
 
-export interface DownloadOptions {
+export interface DownloadOptions extends GalleryFilterOptions {
   outDir: string;
   concurrency: number;
   albumConcurrency: number;
   force: boolean;
   dryRun: boolean;
   metadata: boolean;
-  include?: RegExp;
-  exclude?: RegExp;
-  onlyGalleries?: string[];
 }
 
 interface DownloadOutcome {
@@ -36,11 +40,6 @@ function sanitize(name: string): string {
   // output path outside the intended directory.
   if (cleaned === "." || cleaned === "..") return `_${cleaned}`;
   return cleaned;
-}
-
-/** Lowercases and collapses " / " (as `list` used to render it) down to "/" so copy-pasted queries still match. */
-function normalizeGalleryQuery(s: string): string {
-  return s.trim().toLowerCase().replace(/\s*\/\s*/g, "/");
 }
 
 async function fileMatches(dest: string, expectedSize?: number): Promise<boolean> {
@@ -113,23 +112,6 @@ function resolveDestDirs(galleries: GalleryNode[], outDir: string): Map<GalleryN
     dirs.set(g, join(outDir, ...g.path.map(sanitize), nameSegment));
   }
   return dirs;
-}
-
-async function resolveGalleries(client: SmugMugClient, opts: DownloadOptions): Promise<GalleryNode[]> {
-  let galleries = await listGalleries(client);
-
-  if (opts.onlyGalleries?.length) {
-    // Matches either the bare gallery name ("Exuma") or its full path
-    // ("Picturelife Memories/Exuma") as shown by `smugmug-dl list`.
-    const wanted = new Set(opts.onlyGalleries.map(normalizeGalleryQuery));
-    galleries = galleries.filter(
-      (g) => wanted.has(normalizeGalleryQuery(g.name)) || wanted.has(normalizeGalleryQuery(galleryLabel(g)))
-    );
-  }
-  if (opts.include) galleries = galleries.filter((g) => opts.include!.test(galleryLabel(g)));
-  if (opts.exclude) galleries = galleries.filter((g) => !opts.exclude!.test(galleryLabel(g)));
-
-  return galleries;
 }
 
 async function runDryRun(client: SmugMugClient, galleries: GalleryNode[], outDir: string): Promise<void> {
