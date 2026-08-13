@@ -6,12 +6,13 @@ folder structure on disk, preserving original filenames, and writing a
 
 Built with TypeScript, native `fetch`/streams (Node 20+), and bounded
 concurrency (`p-limit`) so large libraries download quickly without hammering
-SmugMug's API.
+SmugMug's API. Shows a live progress bar while it works.
 
 ## Setup
 
 ```bash
-cd tools/smugmug-downloader
+git clone https://github.com/ramsaytc/smugmug-downloader.git
+cd smugmug-downloader
 npm install
 npm run build
 ```
@@ -34,9 +35,8 @@ into the terminal. The resulting access token is saved to
 `~/.config/smugmug-dl/credentials.json` (mode `0600`) so you only do this
 once.
 
-Tip: run `npm link` (or add `tools/smugmug-downloader/dist` to your `PATH`)
-to use the shorter `smugmug-dl` command shown below instead of
-`node dist/cli.js`.
+Tip: run `npm link` (or add this repo's `dist` directory to your `PATH`) to
+use the shorter `smugmug-dl` command shown below instead of `node dist/cli.js`.
 
 Alternatively, set `SMUGMUG_API_KEY` / `SMUGMUG_API_SECRET` /
 `SMUGMUG_ACCESS_TOKEN` / `SMUGMUG_ACCESS_TOKEN_SECRET` env vars (see
@@ -58,6 +58,11 @@ smugmug-dl download --force               # re-download even if a matching file 
 
 Re-running `download` is cheap: it skips any file already on disk whose size
 matches what SmugMug reports, so an interrupted run can just be repeated.
+
+While it runs you'll see a live progress bar (total image count across all
+galleries, updated as each gallery is discovered). Per-file detail is
+skipped while the bar is up — a summary line and, if anything failed, a list
+of exactly which files and why, print once the run finishes.
 
 ### Image quality
 

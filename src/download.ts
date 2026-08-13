@@ -4,6 +4,7 @@ import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { join } from "node:path";
 import pLimit from "p-limit";
+import cliProgress from "cli-progress";
 import type { SmugMugClient } from "./smugmugApi.js";
 import { listGalleries, listImages, type GalleryNode, type ImageEntry } from "./gallery.js";
 
@@ -19,8 +20,19 @@ export interface DownloadOptions {
   onlyGalleries?: string[];
 }
 
+interface DownloadOutcome {
+  status: "downloaded" | "skipped" | "failed";
+  filename: string;
+  gallery: string;
+  error?: string;
+}
+
 function sanitize(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, "_").trim() || "untitled";
+}
+
+function galleryLabel(gallery: GalleryNode): string {
+  return [...gallery.path, gallery.name].join("/");
 }
 
 async function fileMatches(dest: string, expectedSize?: number): Promise<boolean> {
@@ -32,16 +44,16 @@ async function fileMatches(dest: string, expectedSize?: number): Promise<boolean
   }
 }
 
-async function downloadImage(image: ImageEntry, destDir: string, opts: DownloadOptions): Promise<void> {
+async function downloadImage(
+  image: ImageEntry,
+  destDir: string,
+  gallery: string,
+  force: boolean
+): Promise<DownloadOutcome> {
   const dest = join(destDir, sanitize(image.filename));
 
-  if (!opts.force && (await fileMatches(dest, image.fileSize))) {
-    console.log(`  skip (already downloaded): ${image.filename}`);
-    return;
-  }
-  if (opts.dryRun) {
-    console.log(`  would download: ${image.filename}`);
-    return;
+  if (!force && (await fileMatches(dest, image.fileSize))) {
+    return { status: "skipped", filename: image.filename, gallery };
   }
 
   for (let attempt = 1; attempt <= 4; attempt++) {
@@ -49,24 +61,19 @@ async function downloadImage(image: ImageEntry, destDir: string, opts: DownloadO
       const res = await fetch(image.downloadUrl);
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       await pipeline(Readable.fromWeb(res.body as any), createWriteStream(dest));
-      console.log(`  downloaded: ${image.filename}`);
-      return;
+      return { status: "downloaded", filename: image.filename, gallery };
     } catch (err) {
       if (attempt === 4) {
-        console.error(`  FAILED: ${image.filename} (${(err as Error).message})`);
-        return;
+        return { status: "failed", filename: image.filename, gallery, error: (err as Error).message };
       }
       await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
     }
   }
+  /* istanbul ignore next: loop above always returns by attempt 4 */
+  return { status: "failed", filename: image.filename, gallery, error: "unreachable" };
 }
 
-function galleryLabel(gallery: GalleryNode): string {
-  return [...gallery.path, gallery.name].join("/");
-}
-
-export async function runDownload(client: SmugMugClient, opts: DownloadOptions): Promise<void> {
-  console.log("Fetching gallery list from SmugMug...");
+async function resolveGalleries(client: SmugMugClient, opts: DownloadOptions): Promise<GalleryNode[]> {
   let galleries = await listGalleries(client);
 
   if (opts.onlyGalleries?.length) {
@@ -76,33 +83,89 @@ export async function runDownload(client: SmugMugClient, opts: DownloadOptions):
   if (opts.include) galleries = galleries.filter((g) => opts.include!.test(galleryLabel(g)));
   if (opts.exclude) galleries = galleries.filter((g) => !opts.exclude!.test(galleryLabel(g)));
 
+  return galleries;
+}
+
+async function runDryRun(client: SmugMugClient, galleries: GalleryNode[]): Promise<void> {
+  let totalImages = 0;
+  for (const gallery of galleries) {
+    const images = await listImages(client, gallery.albumUri);
+    totalImages += images.length;
+    console.log(`\n[${galleryLabel(gallery)}] ${images.length} image(s)`);
+    for (const image of images) console.log(`  would download: ${image.filename}`);
+  }
+  console.log(`\nDry run: ${galleries.length} galleries, ${totalImages} images would be processed.`);
+}
+
+export async function runDownload(client: SmugMugClient, opts: DownloadOptions): Promise<void> {
+  console.log("Fetching gallery list from SmugMug...");
+  const galleries = await resolveGalleries(client, opts);
   console.log(`Found ${galleries.length} galleries.`);
+
+  if (opts.dryRun) {
+    await runDryRun(client, galleries);
+    return;
+  }
 
   const imageLimit = pLimit(opts.concurrency);
   const albumLimit = pLimit(opts.albumConcurrency);
-  let imagesSeen = 0;
+
+  // Total grows as each gallery's image list comes back, since galleries are
+  // discovered and downloaded concurrently rather than listed up front.
+  const bar = new cliProgress.SingleBar(
+    {
+      format: "  {bar} {percentage}% | {value}/{total} images | {file}",
+      hideCursor: true,
+      clearOnComplete: false,
+      barsize: 30,
+    },
+    cliProgress.Presets.shades_classic
+  );
+  bar.start(0, 0, { file: "" });
+
+  const failures: DownloadOutcome[] = [];
+  let downloaded = 0;
+  let skipped = 0;
 
   await Promise.all(
     galleries.map((gallery) =>
       albumLimit(async () => {
+        const label = galleryLabel(gallery);
         const destDir = join(opts.outDir, ...gallery.path.map(sanitize), sanitize(gallery.name));
-        if (!opts.dryRun) await mkdir(destDir, { recursive: true });
+        await mkdir(destDir, { recursive: true });
 
         const images = await listImages(client, gallery.albumUri);
-        imagesSeen += images.length;
-        console.log(`\n[${galleryLabel(gallery)}] ${images.length} image(s)`);
+        bar.setTotal(bar.getTotal() + images.length);
 
-        if (opts.metadata && !opts.dryRun) {
+        if (opts.metadata) {
           await writeFile(
             join(destDir, "_metadata.json"),
             JSON.stringify({ gallery: gallery.name, path: gallery.path, images }, null, 2)
           );
         }
 
-        await Promise.all(images.map((image) => imageLimit(() => downloadImage(image, destDir, opts))));
+        await Promise.all(
+          images.map((image) =>
+            imageLimit(async () => {
+              const outcome = await downloadImage(image, destDir, label, opts.force);
+              if (outcome.status === "downloaded") downloaded += 1;
+              else if (outcome.status === "skipped") skipped += 1;
+              else failures.push(outcome);
+              bar.increment(1, { file: `${label}/${image.filename}` });
+            })
+          )
+        );
       })
     )
   );
 
-  console.log(`\nDone. Processed ${galleries.length} galleries, ${imagesSeen} images.`);
+  bar.stop();
+
+  console.log(
+    `\nDone. ${galleries.length} galleries — ${downloaded} downloaded, ${skipped} already up to date, ${failures.length} failed.`
+  );
+  if (failures.length > 0) {
+    console.log("\nFailed:");
+    for (const f of failures) console.log(`  ${f.gallery}/${f.filename}: ${f.error}`);
+  }
 }
