@@ -114,11 +114,27 @@ function resolveDestDirs(galleries: GalleryNode[], outDir: string): Map<GalleryN
   return dirs;
 }
 
-async function runDryRun(client: SmugMugClient, galleries: GalleryNode[], outDir: string): Promise<void> {
+async function runDryRun(
+  client: SmugMugClient,
+  galleries: GalleryNode[],
+  outDir: string,
+  concurrency: number,
+  albumConcurrency: number
+): Promise<void> {
   const destDirs = resolveDestDirs(galleries, outDir);
+  const albumLimit = pLimit(albumConcurrency);
+
+  // Fetch every gallery's image list concurrently, but print in a fixed
+  // (gallery) order afterward — interleaving concurrent output here would
+  // just be noise.
+  const perGallery = await Promise.all(
+    galleries.map((gallery) =>
+      albumLimit(async () => ({ gallery, images: await listImages(client, gallery.albumUri, concurrency) }))
+    )
+  );
+
   let totalImages = 0;
-  for (const gallery of galleries) {
-    const images = await listImages(client, gallery.albumUri);
+  for (const { gallery, images } of perGallery) {
     totalImages += images.length;
     console.log(`\n[${galleryLabel(gallery)}] -> ${destDirs.get(gallery)} (${images.length} image(s))`);
     for (const image of images) console.log(`  would download: ${image.filename}`);
@@ -132,7 +148,7 @@ export async function runDownload(client: SmugMugClient, opts: DownloadOptions):
   console.log(`Found ${galleries.length} galleries.`);
 
   if (opts.dryRun) {
-    await runDryRun(client, galleries, opts.outDir);
+    await runDryRun(client, galleries, opts.outDir, opts.concurrency, opts.albumConcurrency);
     return;
   }
 
@@ -164,7 +180,7 @@ export async function runDownload(client: SmugMugClient, opts: DownloadOptions):
         const destDir = destDirs.get(gallery)!;
         await mkdir(destDir, { recursive: true });
 
-        const images = await listImages(client, gallery.albumUri);
+        const images = await listImages(client, gallery.albumUri, opts.concurrency);
         bar.setTotal(bar.getTotal() + images.length);
 
         if (opts.metadata) {

@@ -1,4 +1,8 @@
+import pLimit from "p-limit";
 import type { SmugMugClient } from "./smugmugApi.js";
+
+/** Default concurrency for metadata calls (folder listing, per-image size lookups) — cheap JSON requests, safe to run well ahead of the byte-download concurrency. */
+const DEFAULT_METADATA_CONCURRENCY = 8;
 
 export interface GalleryNode {
   /** Folder path leading to this gallery, e.g. ["2024", "Weddings"] */
@@ -40,17 +44,29 @@ async function paginateAll(client: SmugMugClient, uri: string, key: "Node" | "Al
   return results;
 }
 
-async function walkNode(client: SmugMugClient, node: any, path: string[], out: GalleryNode[]): Promise<void> {
+async function walkNode(
+  client: SmugMugClient,
+  node: any,
+  path: string[],
+  out: GalleryNode[],
+  limit: ReturnType<typeof pLimit>
+): Promise<void> {
   if (node.Type === "Album" && node.Uris?.Album?.Uri) {
     out.push({ path, name: node.Name, albumUri: node.Uris.Album.Uri });
     return;
   }
   if (node.Uris?.ChildNodes?.Uri) {
     const childPath = node.Type === "Folder" ? [...path, node.Name] : path;
-    const children = await paginateAll(client, node.Uris.ChildNodes.Uri, "Node");
-    for (const child of children) {
-      await walkNode(client, child, childPath, out);
-    }
+    // Only the actual network call goes through `limit` — recursing into
+    // walkNode itself must stay unbounded. Wrapping the recursive call in
+    // the same limiter would deadlock: a parent occupying one of N slots
+    // would then need another slot from that same limiter for its own
+    // child, which can never free up before the parent (still awaiting it)
+    // releases its own.
+    const children = await limit(() => paginateAll(client, node.Uris.ChildNodes.Uri, "Node"));
+    // Sibling folders/albums don't depend on each other, so walk them
+    // concurrently rather than one network round-trip at a time.
+    await Promise.all(children.map((child) => walkNode(client, child, childPath, out, limit)));
   }
 }
 
@@ -62,10 +78,9 @@ export async function listGalleries(client: SmugMugClient): Promise<GalleryNode[
 
   const out: GalleryNode[] = [];
   if (root.Response.Node?.Uris?.ChildNodes?.Uri) {
-    const children = await paginateAll(client, root.Response.Node.Uris.ChildNodes.Uri, "Node");
-    for (const child of children) {
-      await walkNode(client, child, [], out);
-    }
+    const limit = pLimit(DEFAULT_METADATA_CONCURRENCY);
+    const children = await limit(() => paginateAll(client, root.Response.Node.Uris.ChildNodes.Uri, "Node"));
+    await Promise.all(children.map((child) => walkNode(client, child, [], out, limit)));
   }
   return out;
 }
@@ -121,66 +136,75 @@ function fallbackFilename(img: any, details: any): string {
   return `${key}.${ext}`;
 }
 
+async function resolveImageEntry(client: SmugMugClient, img: any): Promise<ImageEntry | undefined> {
+  let downloadUrl: string | undefined;
+  let fileSize: number | undefined;
+  let md5: string | undefined;
+  let details: any;
+
+  const sizeDetailsUri: string | undefined = img?.Uris?.ImageSizeDetails?.Uri;
+  if (sizeDetailsUri) {
+    try {
+      const res = await client.get<any>(sizeDetailsUri);
+      details = res.Response.ImageSizeDetails;
+      downloadUrl =
+        details.OriginalImageUrl ??
+        details.LargestImageUrl ??
+        details.X5LargeImageUrl ??
+        details.X4LargeImageUrl ??
+        details.X3LargeImageUrl ??
+        details.X2LargeImageUrl ??
+        details.LargeImageUrl ??
+        details.MediumImageUrl;
+      fileSize = details.OriginalSize;
+      md5 = details.MD5Sum;
+    } catch {
+      // fall through to ArchivedUri below
+    }
+  }
+
+  if (!downloadUrl && img.ArchivedUri) {
+    downloadUrl = img.ArchivedUri;
+    fileSize = img.ArchivedSize;
+    md5 = img.ArchivedMD5;
+  }
+
+  const filename = firstNonBlank(details?.Filename, img.FileName) ?? fallbackFilename(img, details);
+
+  if (!downloadUrl) {
+    console.warn(`  warning: no downloadable size found for "${filename}", skipping`);
+    return undefined;
+  }
+
+  return {
+    filename,
+    downloadUrl,
+    fileSize,
+    md5,
+    caption: img.Caption || undefined,
+    keywords: Array.isArray(img.KeywordArray) ? img.KeywordArray.join(", ") : img.Keywords || undefined,
+    dateTimeOriginal: img.DateTimeOriginal || undefined,
+  };
+}
+
 /**
  * Fetches every image in an album along with its best available download
  * URL. Prefers the ImageSizeDetails sub-resource (Original if the account's
  * download permissions allow it, else the largest size available); falls
- * back to the AlbumImage's own ArchivedUri if present.
+ * back to the AlbumImage's own ArchivedUri if present. Looks up each
+ * image's size concurrently (bounded by `concurrency`) rather than one
+ * request at a time — this is the dominant cost for large galleries.
  */
-export async function listImages(client: SmugMugClient, albumUri: string): Promise<ImageEntry[]> {
+export async function listImages(
+  client: SmugMugClient,
+  albumUri: string,
+  concurrency = DEFAULT_METADATA_CONCURRENCY
+): Promise<ImageEntry[]> {
   const raw = await paginateAll(client, `${albumUri}!images`, "AlbumImage");
-  const out: ImageEntry[] = [];
+  const limit = pLimit(concurrency);
 
-  for (const img of raw) {
-    let downloadUrl: string | undefined;
-    let fileSize: number | undefined;
-    let md5: string | undefined;
-    let details: any;
-
-    const sizeDetailsUri: string | undefined = img?.Uris?.ImageSizeDetails?.Uri;
-    if (sizeDetailsUri) {
-      try {
-        const res = await client.get<any>(sizeDetailsUri);
-        details = res.Response.ImageSizeDetails;
-        downloadUrl =
-          details.OriginalImageUrl ??
-          details.LargestImageUrl ??
-          details.X5LargeImageUrl ??
-          details.X4LargeImageUrl ??
-          details.X3LargeImageUrl ??
-          details.X2LargeImageUrl ??
-          details.LargeImageUrl ??
-          details.MediumImageUrl;
-        fileSize = details.OriginalSize;
-        md5 = details.MD5Sum;
-      } catch {
-        // fall through to ArchivedUri below
-      }
-    }
-
-    if (!downloadUrl && img.ArchivedUri) {
-      downloadUrl = img.ArchivedUri;
-      fileSize = img.ArchivedSize;
-      md5 = img.ArchivedMD5;
-    }
-
-    const filename = firstNonBlank(details?.Filename, img.FileName) ?? fallbackFilename(img, details);
-
-    if (!downloadUrl) {
-      console.warn(`  warning: no downloadable size found for "${filename}", skipping`);
-      continue;
-    }
-
-    out.push({
-      filename,
-      downloadUrl,
-      fileSize,
-      md5,
-      caption: img.Caption || undefined,
-      keywords: Array.isArray(img.KeywordArray) ? img.KeywordArray.join(", ") : img.Keywords || undefined,
-      dateTimeOriginal: img.DateTimeOriginal || undefined,
-    });
-  }
+  const resolved = await Promise.all(raw.map((img) => limit(() => resolveImageEntry(client, img))));
+  const out = resolved.filter((entry): entry is ImageEntry => entry !== undefined);
 
   dedupeFilenames(out);
   return out;

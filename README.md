@@ -63,6 +63,11 @@ smugmug-dl download --force               # re-download even if a matching file 
 Re-running `download` is cheap: it skips any file already on disk whose size
 matches what SmugMug reports, so an interrupted run can just be repeated.
 
+Discovery (walking folders, looking up each image's size) runs concurrently
+rather than one API call at a time — `-c`/`--concurrency` governs this the
+same way it governs image downloads, so a larger library finds and sizes
+its images noticeably faster, not just downloads them faster.
+
 While it runs you'll see a live progress bar (total image count across all
 galleries, updated as each gallery is discovered). Per-file detail is
 skipped while the bar is up — a summary line and, if anything failed, a list
