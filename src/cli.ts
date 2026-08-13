@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { login } from "./oauth.js";
 import { requireCredentials } from "./config.js";
 import { SmugMugClient } from "./smugmugApi.js";
-import { listGalleries } from "./gallery.js";
+import { galleryLabel, listGalleries } from "./gallery.js";
 import { runDownload } from "./download.js";
 
 const program = new Command();
@@ -42,7 +42,7 @@ program
     if (opts.json) {
       console.log(JSON.stringify(galleries, null, 2));
     } else {
-      for (const g of galleries) console.log([...g.path, g.name].join(" / "));
+      for (const g of galleries) console.log(galleryLabel(g));
       console.log(`\n${galleries.length} galleries total.`);
     }
   });
@@ -53,7 +53,7 @@ program
   .option("-o, --out <dir>", "output directory", "./smugmug-download")
   .option("-c, --concurrency <n>", "parallel image downloads", "6")
   .option("--album-concurrency <n>", "galleries processed in parallel", "3")
-  .option("--gallery <name...>", "only download galleries with this exact name (repeatable)")
+  .option("--gallery <name...>", "only these galleries: bare name or full path from `list` (repeatable)")
   .option("--include <pattern>", "only include galleries whose path matches this regex")
   .option("--exclude <pattern>", "exclude galleries whose path matches this regex")
   .option("--force", "re-download files even if they already exist", false)

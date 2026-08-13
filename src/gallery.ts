@@ -17,6 +17,11 @@ export interface ImageEntry {
   dateTimeOriginal?: string;
 }
 
+/** Canonical "Folder/Sub/Gallery" identifier for a gallery, used consistently by `list`, `--gallery`, `--include`, and `--exclude`. */
+export function galleryLabel(gallery: GalleryNode): string {
+  return [...gallery.path, gallery.name].join("/");
+}
+
 const PAGE_SIZE = 100;
 
 async function paginateAll(client: SmugMugClient, uri: string, key: "Node" | "AlbumImage"): Promise<any[]> {

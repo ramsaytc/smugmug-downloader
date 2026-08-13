@@ -52,6 +52,7 @@ smugmug-dl download                       # download everything into ./smugmug-d
 smugmug-dl download -o ~/Pictures/smugmug # choose an output directory
 smugmug-dl download --dry-run             # preview without writing files
 smugmug-dl download --gallery "Iceland 2025" --gallery "Portfolio"
+smugmug-dl download --gallery "Picturelife Memories/Exuma"  # nested gallery: bare name or full path both work
 smugmug-dl download --include "^Weddings/"
 smugmug-dl download --force               # re-download even if a matching file exists
 ```
@@ -79,7 +80,7 @@ without guessing which sizes are permitted per-gallery.
 | `-o, --out <dir>` | `./smugmug-download` | Output directory |
 | `-c, --concurrency <n>` | `6` | Parallel image downloads |
 | `--album-concurrency <n>` | `3` | Galleries processed in parallel |
-| `--gallery <name...>` | — | Only these galleries (repeatable, exact name match) |
+| `--gallery <name...>` | — | Only these galleries (repeatable). Matches either the bare name ("Exuma") or the full "Folder/Sub/Gallery" path exactly as `list` prints it |
 | `--include <regex>` | — | Only galleries whose `Folder/Sub/Gallery` path matches |
 | `--exclude <regex>` | — | Skip galleries whose path matches |
 | `--force` | off | Re-download even if a matching file exists |

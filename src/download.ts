@@ -6,7 +6,7 @@ import { join } from "node:path";
 import pLimit from "p-limit";
 import cliProgress from "cli-progress";
 import type { SmugMugClient } from "./smugmugApi.js";
-import { listGalleries, listImages, type GalleryNode, type ImageEntry } from "./gallery.js";
+import { galleryLabel, listGalleries, listImages, type GalleryNode, type ImageEntry } from "./gallery.js";
 
 export interface DownloadOptions {
   outDir: string;
@@ -31,8 +31,9 @@ function sanitize(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, "_").trim() || "untitled";
 }
 
-function galleryLabel(gallery: GalleryNode): string {
-  return [...gallery.path, gallery.name].join("/");
+/** Lowercases and collapses " / " (as `list` used to render it) down to "/" so copy-pasted queries still match. */
+function normalizeGalleryQuery(s: string): string {
+  return s.trim().toLowerCase().replace(/\s*\/\s*/g, "/");
 }
 
 async function fileMatches(dest: string, expectedSize?: number): Promise<boolean> {
@@ -77,8 +78,12 @@ async function resolveGalleries(client: SmugMugClient, opts: DownloadOptions): P
   let galleries = await listGalleries(client);
 
   if (opts.onlyGalleries?.length) {
-    const wanted = new Set(opts.onlyGalleries.map((s) => s.toLowerCase()));
-    galleries = galleries.filter((g) => wanted.has(g.name.toLowerCase()));
+    // Matches either the bare gallery name ("Exuma") or its full path
+    // ("Picturelife Memories/Exuma") as shown by `smugmug-dl list`.
+    const wanted = new Set(opts.onlyGalleries.map(normalizeGalleryQuery));
+    galleries = galleries.filter(
+      (g) => wanted.has(normalizeGalleryQuery(g.name)) || wanted.has(normalizeGalleryQuery(galleryLabel(g)))
+    );
   }
   if (opts.include) galleries = galleries.filter((g) => opts.include!.test(galleryLabel(g)));
   if (opts.exclude) galleries = galleries.filter((g) => !opts.exclude!.test(galleryLabel(g)));
