@@ -1,0 +1,28 @@
+{
+  "name": "smugmug-downloader",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CLI to download every gallery from a SmugMug account, preserving folder structure, filenames, and metadata.",
+  "type": "module",
+  "bin": {
+    "smugmug-dl": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "oauth-1.0a": "^2.2.6",
+    "p-limit": "^7.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
