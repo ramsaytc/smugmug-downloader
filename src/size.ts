@@ -21,6 +21,7 @@ interface GallerySize {
   bytes: number;
   imageCount: number;
   unknownCount: number;
+  originalCount: number;
 }
 
 /**
@@ -50,11 +51,13 @@ export async function runSizeEstimate(client: SmugMugClient, opts: SizeOptions):
         const images = await listImages(client, gallery.albumUri);
         let bytes = 0;
         let unknownCount = 0;
+        let originalCount = 0;
         for (const image of images) {
           if (typeof image.fileSize === "number") bytes += image.fileSize;
           else unknownCount++;
+          if (image.isOriginal) originalCount++;
         }
-        sizes.push({ label: galleryLabel(gallery), bytes, imageCount: images.length, unknownCount });
+        sizes.push({ label: galleryLabel(gallery), bytes, imageCount: images.length, unknownCount, originalCount });
         bar.increment();
       })
     )
@@ -66,19 +69,29 @@ export async function runSizeEstimate(client: SmugMugClient, opts: SizeOptions):
   if (opts.byGallery) {
     console.log("");
     for (const g of sizes) {
-      const note = g.unknownCount > 0 ? ` (${g.unknownCount} of ${g.imageCount} with unknown size)` : "";
-      console.log(`  ${g.label}: ${formatBytes(g.bytes)} across ${g.imageCount} image(s)${note}`);
+      const notes = [];
+      if (g.unknownCount > 0) notes.push(`${g.unknownCount} unknown size`);
+      if (g.originalCount < g.imageCount) notes.push(`${g.imageCount - g.originalCount} not original quality`);
+      const suffix = notes.length > 0 ? ` (${notes.join(", ")})` : "";
+      console.log(`  ${g.label}: ${formatBytes(g.bytes)} across ${g.imageCount} image(s)${suffix}`);
     }
   }
 
   const totalBytes = sizes.reduce((sum, g) => sum + g.bytes, 0);
   const totalImages = sizes.reduce((sum, g) => sum + g.imageCount, 0);
   const totalUnknown = sizes.reduce((sum, g) => sum + g.unknownCount, 0);
+  const totalOriginal = sizes.reduce((sum, g) => sum + g.originalCount, 0);
 
   console.log(`\n${galleries.length} galleries, ${totalImages} images, estimated total: ${formatBytes(totalBytes)}`);
   if (totalUnknown > 0) {
     console.log(
       `Note: ${totalUnknown} image(s) had no reported size (excluded from the total above) — actual size will be a bit higher.`
+    );
+  }
+  console.log(`${totalOriginal} of ${totalImages} would download as the untouched original file (EXIF/GPS guaranteed intact).`);
+  if (totalOriginal < totalImages) {
+    console.log(
+      `${totalImages - totalOriginal} would fall back to a rendered size — that account/gallery doesn't have "allow original downloads" enabled.`
     );
   }
 }

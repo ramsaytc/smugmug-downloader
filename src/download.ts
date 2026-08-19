@@ -134,12 +134,23 @@ async function runDryRun(
   );
 
   let totalImages = 0;
+  let originalCount = 0;
+  const nonOriginal: { gallery: string; filename: string }[] = [];
   for (const { gallery, images } of perGallery) {
     totalImages += images.length;
-    console.log(`\n[${galleryLabel(gallery)}] -> ${destDirs.get(gallery)} (${images.length} image(s))`);
-    for (const image of images) console.log(`  would download: ${image.filename}`);
+    const label = galleryLabel(gallery);
+    console.log(`\n[${label}] -> ${destDirs.get(gallery)} (${images.length} image(s))`);
+    for (const image of images) {
+      console.log(`  would download: ${image.filename}${image.isOriginal ? "" : " (fallback size, not original)"}`);
+      if (image.isOriginal) originalCount += 1;
+      else nonOriginal.push({ gallery: label, filename: image.filename });
+    }
   }
   console.log(`\nDry run: ${galleries.length} galleries, ${totalImages} images would be processed.`);
+  console.log(`${originalCount} of ${totalImages} would come through as the untouched original file.`);
+  if (nonOriginal.length > 0) {
+    console.log(`${nonOriginal.length} would fall back to a rendered size (metadata not guaranteed intact).`);
+  }
 }
 
 export async function runDownload(client: SmugMugClient, opts: DownloadOptions): Promise<void> {
@@ -170,8 +181,10 @@ export async function runDownload(client: SmugMugClient, opts: DownloadOptions):
   bar.start(0, 0, { file: "" });
 
   const failures: DownloadOutcome[] = [];
+  const nonOriginal: { gallery: string; filename: string }[] = [];
   let downloaded = 0;
   let skipped = 0;
+  let originalCount = 0;
 
   await Promise.all(
     galleries.map((gallery) =>
@@ -197,6 +210,10 @@ export async function runDownload(client: SmugMugClient, opts: DownloadOptions):
               if (outcome.status === "downloaded") downloaded += 1;
               else if (outcome.status === "skipped") skipped += 1;
               else failures.push(outcome);
+
+              if (image.isOriginal) originalCount += 1;
+              else nonOriginal.push({ gallery: label, filename: image.filename });
+
               bar.increment(1, { file: `${label}/${image.filename}` });
             })
           )
@@ -207,11 +224,23 @@ export async function runDownload(client: SmugMugClient, opts: DownloadOptions):
 
   bar.stop();
 
+  const totalImages = originalCount + nonOriginal.length;
   console.log(
     `\nDone. ${galleries.length} galleries — ${downloaded} downloaded, ${skipped} already up to date, ${failures.length} failed.`
   );
   if (failures.length > 0) {
     console.log("\nFailed:");
     for (const f of failures) console.log(`  ${f.gallery}/${f.filename}: ${f.error}`);
+  }
+
+  console.log(
+    `\n${originalCount} of ${totalImages} image(s) came through as the untouched original file (EXIF/GPS/capture-date guaranteed intact).`
+  );
+  if (nonOriginal.length > 0) {
+    console.log(
+      `${nonOriginal.length} fell back to a SmugMug-rendered size — that account/gallery doesn't have "allow original downloads" enabled, so embedded metadata on these isn't guaranteed:`
+    );
+    for (const n of nonOriginal.slice(0, 20)) console.log(`  ${n.gallery}/${n.filename}`);
+    if (nonOriginal.length > 20) console.log(`  ...and ${nonOriginal.length - 20} more`);
   }
 }

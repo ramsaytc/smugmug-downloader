@@ -19,6 +19,16 @@ export interface ImageEntry {
   caption?: string;
   keywords?: string;
   dateTimeOriginal?: string;
+  /**
+   * True when downloadUrl points at the untouched originally-uploaded file
+   * (SmugMug's OriginalImageUrl or ArchivedUri) — the only case where
+   * embedded EXIF/GPS/capture-date are guaranteed intact, since the bytes
+   * are piped straight through with no re-encoding on either end. False
+   * means SmugMug's account/gallery "allow original downloads" permission
+   * wasn't granted for this image, so we fell back to a rendered size
+   * SmugMug generated, which may have re-encoded or stripped metadata.
+   */
+  isOriginal: boolean;
 }
 
 /** Canonical "Folder/Sub/Gallery" identifier for a gallery, used consistently by `list`, `--gallery`, `--include`, and `--exclude`. */
@@ -141,21 +151,26 @@ async function resolveImageEntry(client: SmugMugClient, img: any): Promise<Image
   let fileSize: number | undefined;
   let md5: string | undefined;
   let details: any;
+  let isOriginal = false;
 
   const sizeDetailsUri: string | undefined = img?.Uris?.ImageSizeDetails?.Uri;
   if (sizeDetailsUri) {
     try {
       const res = await client.get<any>(sizeDetailsUri);
       details = res.Response.ImageSizeDetails;
-      downloadUrl =
-        details.OriginalImageUrl ??
-        details.LargestImageUrl ??
-        details.X5LargeImageUrl ??
-        details.X4LargeImageUrl ??
-        details.X3LargeImageUrl ??
-        details.X2LargeImageUrl ??
-        details.LargeImageUrl ??
-        details.MediumImageUrl;
+      if (details.OriginalImageUrl) {
+        downloadUrl = details.OriginalImageUrl;
+        isOriginal = true;
+      } else {
+        downloadUrl =
+          details.LargestImageUrl ??
+          details.X5LargeImageUrl ??
+          details.X4LargeImageUrl ??
+          details.X3LargeImageUrl ??
+          details.X2LargeImageUrl ??
+          details.LargeImageUrl ??
+          details.MediumImageUrl;
+      }
       fileSize = details.OriginalSize;
       md5 = details.MD5Sum;
     } catch {
@@ -164,9 +179,12 @@ async function resolveImageEntry(client: SmugMugClient, img: any): Promise<Image
   }
 
   if (!downloadUrl && img.ArchivedUri) {
+    // ArchivedUri is SmugMug's other path to the originally-uploaded file,
+    // used when ImageSizeDetails isn't linked for this image.
     downloadUrl = img.ArchivedUri;
     fileSize = img.ArchivedSize;
     md5 = img.ArchivedMD5;
+    isOriginal = true;
   }
 
   const filename = firstNonBlank(details?.Filename, img.FileName) ?? fallbackFilename(img, details);
@@ -184,6 +202,7 @@ async function resolveImageEntry(client: SmugMugClient, img: any): Promise<Image
     caption: img.Caption || undefined,
     keywords: Array.isArray(img.KeywordArray) ? img.KeywordArray.join(", ") : img.Keywords || undefined,
     dateTimeOriginal: img.DateTimeOriginal || undefined,
+    isOriginal,
   };
 }
 

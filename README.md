@@ -73,13 +73,33 @@ galleries, updated as each gallery is discovered). Per-file detail is
 skipped while the bar is up — a summary line and, if anything failed, a list
 of exactly which files and why, print once the run finishes.
 
-### Image quality
+### Image quality, and preserving EXIF/GPS/capture-date
 
 For each photo the tool asks SmugMug for the largest size your account's
 download permissions allow — "Original" if you've enabled original-size
 downloads for that content, otherwise the largest rendered size SmugMug
 offers. There's no `--size` flag; this always gets you the best available
 without guessing which sizes are permitted per-gallery.
+
+This matters beyond resolution: an **Original** download is the exact bytes
+you uploaded, piped straight to disk untouched, so embedded EXIF (camera,
+GPS, capture date) survives by construction. A **fallback** (rendered) size
+is something SmugMug's pipeline generated, and it isn't guaranteed to carry
+the same embedded metadata — GPS in particular is a common casualty.
+
+Both `download` and `size --by-gallery` report this per run: a count of how
+many images came through as the true original vs. how many fell back, with
+the specific gallery/filenames for anything that fell back (`download` lists
+up to 20; `--dry-run` marks each one inline). If you see fallbacks and want
+them at full quality with metadata guaranteed, check SmugMug's **Account
+Settings → Privacy** for an "allow original downloads" style setting, and
+each affected gallery's own **Sharing & Privacy** settings for a per-gallery
+override — this is a permission SmugMug enforces server-side, not something
+this CLI can bypass. Once enabled, just re-run `download --force` (or drop
+`--force` if those files don't exist locally yet) to fetch the originals.
+
+The `isOriginal` field is also written into each gallery's `_metadata.json`
+per image, if you want to audit or script against it afterward.
 
 ### Size estimate
 
